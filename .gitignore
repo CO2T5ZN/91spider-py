@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+
+# Node
+node_modules/
+frontend/dist/
+.vite/
+
+# 密码/连接信息
+board.json
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

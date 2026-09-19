@@ -1,0 +1,126 @@
+"""video-gallery：video_spider 下载视频的展示站（只读共用数据库与文件）。"""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+
+from . import config, db, paths
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("gallery")
+
+app = FastAPI(title="video-gallery", docs_url=None, redoc_url=None)
+
+if config.COVER_DIR.is_dir():
+    app.mount("/covers", StaticFiles(directory=config.COVER_DIR), name="covers")
+
+
+def parse_tags(raw: str | None) -> list[str]:
+    try:
+        v = json.loads(raw) if raw else []
+        return v if isinstance(v, list) else []
+    except (ValueError, TypeError):
+        return []
+
+
+@app.get("/api/categories")
+def categories() -> dict:
+    rows = db.query_all(
+        """SELECT c.id, c.name, c.type, c.group_name, COUNT(v.id) AS count
+           FROM categories c JOIN videos v ON v.category_id = c.id AND v.status = 'done'
+           GROUP BY c.id ORDER BY count DESC, c.name"""
+    )
+    return {"categories": rows}
+
+
+@app.get("/api/videos")
+def videos(
+    category_id: int | None = None,
+    q: str = "",
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=96),
+) -> dict:
+    where = ["v.status = 'done'"]
+    params: list = []
+    if category_id:
+        where.append("v.category_id = ?")
+        params.append(category_id)
+    if q.strip():
+        like = f"%{q.strip()}%"
+        where.append("(v.title LIKE ? ESCAPE '\\' OR v.video_key LIKE ? ESCAPE '\\')")
+        esc = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{esc}%"
+        params += [like, like]
+    where_sql = " AND ".join(where)
+
+    total = db.query_one(
+        f"SELECT COUNT(*) AS n FROM videos v WHERE {where_sql}", tuple(params)
+    )["n"]
+    rows = db.query_all(
+        f"""SELECT v.id, v.title, v.video_key, v.cover_path, v.tags, v.updated_at,
+                   v.category_id, c.name AS category_name
+            FROM videos v JOIN categories c ON c.id = v.category_id
+            WHERE {where_sql}
+            ORDER BY v.updated_at DESC, v.id DESC
+            LIMIT ? OFFSET ?""",
+        tuple(params + [page_size, (page - 1) * page_size]),
+    )
+    items = []
+    for r in rows:
+        f = paths.find_video_file(r["category_name"], r["video_key"])
+        items.append({
+            "id": r["id"],
+            "title": r["title"] or r["video_key"],
+            "video_key": r["video_key"],
+            "tags": parse_tags(r["tags"]),
+            "category_id": r["category_id"],
+            "category_name": r["category_name"],
+            "cover_url": f"/covers/{r['cover_path'].split('/')[-1]}" if r["cover_path"] else None,
+            "ext": f.suffix.lstrip(".") if f else None,
+            "size": f.stat().st_size if f else None,
+            "updated_at": r["updated_at"],
+        })
+    return {"total": total, "page": page, "page_size": page_size, "items": items}
+
+
+@app.get("/api/video-file/{video_id}")
+def video_file(video_id: int):
+    v = db.query_one(
+        """SELECT v.video_key, v.category_id, c.name AS category_name
+           FROM videos v JOIN categories c ON c.id = v.category_id WHERE v.id = ?""",
+        (video_id,),
+    )
+    if not v:
+        raise HTTPException(404, "视频不存在")
+    f = paths.find_video_file(v["category_name"], v["video_key"])
+    if not f:
+        raise HTTPException(404, "视频文件缺失")
+    # FileResponse 原生处理 Range 头（206 分段），浏览器可拖进度条
+    return FileResponse(f, media_type=_media_type(f.suffix), filename=f.name)
+
+
+def _media_type(suffix: str) -> str:
+    return {".mp4": "video/mp4", ".ts": "video/mp2t"}.get(suffix, "application/octet-stream")
+
+
+# ---------------- 前端静态托管（SPA 回退，放最后注册） ----------------
+
+from pathlib import Path  # noqa: E402
+
+_DIST = Path(config.FRONTEND_DIST)
+if _DIST.is_dir():
+    if (_DIST / "assets").is_dir():
+        app.mount("/assets", StaticFiles(directory=_DIST / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def spa_fallback(full_path: str):
+        candidate = (_DIST / full_path).resolve()
+        if full_path and candidate.is_file() and str(candidate).startswith(str(_DIST.resolve())):
+            return FileResponse(candidate)
+        return FileResponse(_DIST / "index.html",
+                            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})

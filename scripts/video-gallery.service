@@ -1,0 +1,20 @@
+[Unit]
+Description=Video Gallery (read-only view of video_spider data)
+Documentation=file:/opt/video-gallery/README.md
+After=network-online.target
+Wants=network-online.target
+# 只读共用 205 硬盘上的 spider 数据
+RequiresMountsFor=/mnt/hdd
+
+[Service]
+User=sa
+WorkingDirectory=/opt/video-gallery
+Environment=GALLERY_HOST=0.0.0.0
+Environment=GALLERY_PORT=8766
+Environment=VIDEO_SPIDER_DATA=/mnt/hdd/video-spider-data
+ExecStart=/opt/video-gallery/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
