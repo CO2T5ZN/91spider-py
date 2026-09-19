@@ -161,5 +161,6 @@ if _DIST.is_dir():
         candidate = (_DIST / full_path).resolve()
         if full_path and candidate.is_file() and str(candidate).startswith(str(_DIST.resolve())):
             return FileResponse(candidate)
+        # index.html 严禁缓存（no-store），避免 SPA 壳陈旧引用已被替换的 bundle
         return FileResponse(_DIST / "index.html",
-                            headers={"Cache-Control": "no-cache", "Pragma": "no-cache"})
+                            headers={"Cache-Control": "no-store", "Pragma": "no-cache"})
