@@ -97,8 +97,8 @@ onMounted(async () => {
 </template>
 
 <style>
-html, body, #app { margin: 0; padding: 0; min-height: 100vh; background: #101014; }
-.page { min-height: 100vh; display: flex; flex-direction: column; background: #101014; }
+html, body, #app { margin: 0; padding: 0; background: #101014; }
+.page { height: 100vh; display: flex; flex-direction: column; overflow: hidden; background: #101014; }
 .topbar {
   display: flex; align-items: center; gap: 16px;
   padding: 10px 18px 6px; color: #e6e6e6;
@@ -116,8 +116,45 @@ html, body, #app { margin: 0; padding: 0; min-height: 100vh; background: #101014
 }
 .cat-tag:hover { color: #fff; }
 .cat-tag.ant-tag-checkable-checked { background: #1677ff; color: #fff; border-color: #1677ff; }
-.grid-area { flex: 1; padding: 14px 18px 8px; }
-.pager { display: flex; justify-content: center; padding: 20px 0 10px; }
+
+/* 列表区：占满剩余视口（内容不足也保持该高度），超出部分内部滚动 */
+.grid-area {
+  flex: 1; min-height: 0; overflow-y: auto;
+  padding: 14px 18px 8px;
+  display: flex; flex-direction: column;
+}
+.grid-area::-webkit-scrollbar { width: 8px; }
+.grid-area::-webkit-scrollbar-thumb { background: #2c2c36; border-radius: 4px; }
+.grid-area :deep(.ant-spin-nested-loading),
+.grid-area :deep(.ant-spin-container) { flex: 1; display: flex; flex-direction: column; }
+.grid-area :deep(.ant-empty) { margin: auto; }
+.grid-area :deep(.ant-empty-description) { color: #6a6a75; }
+.pager { margin-top: auto; display: flex; justify-content: center; padding: 18px 0 10px; }
+
+/* 分页暗色适配 */
+.pager .ant-pagination-item,
+.pager .ant-pagination-item-link { background: #1d1d25; border-color: #2c2c36; }
+.pager .ant-pagination-item a,
+.pager .ant-pagination-item-link { color: #c9c9d1; }
+.pager .ant-pagination-item-active { border-color: #1677ff; }
+.pager .ant-pagination-item-active a { color: #fff; }
+.pager .ant-pagination-item:hover,
+.pager .ant-pagination-item-link:hover { border-color: #1677ff; }
+.pager .ant-pagination-item:hover a { color: #fff; }
+.pager .ant-pagination-disabled .ant-pagination-item-link,
+.pager .ant-pagination-disabled:hover .ant-pagination-item-link {
+  color: #55555f; background: #15151b; border-color: #23232b;
+}
+.pager .ant-pagination-total-text { color: #8a8a93; }
+.pager .ant-pagination-options .ant-select-selector {
+  background: #1d1d25 !important; border-color: #2c2c36 !important; color: #c9c9d1 !important;
+}
+.pager .ant-select-arrow { color: #8a8a93; }
+/* 每页条数下拉渲染在 body 下，全局做暗色 */
+.ant-select-dropdown { background: #1d1d25 !important; border: 1px solid #2c2c36; }
+.ant-select-item { color: #c9c9d1; }
+.ant-select-item-option-active { background: #26262f !important; }
+.ant-select-item-option-selected { background: #14213a !important; color: #fff; }
 
 /* 移动端适配 */
 @media (max-width: 768px) {
