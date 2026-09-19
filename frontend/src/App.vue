@@ -44,7 +44,14 @@ function onPage(p, ps) { page.value = p; pageSize.value = ps; load() }
 function pickCategory(id) { categoryId.value = id; page.value = 1; load() }
 
 const playing = ref(null)
-function play(item) { playing.value = item }
+function play(item) {
+  // 移动端：新标签页打开全屏播放页；桌面端：弹层播放
+  if (window.matchMedia('(max-width: 768px)').matches) {
+    window.open(`/watch/${item.id}`, '_blank')
+    return
+  }
+  playing.value = item
+}
 
 onMounted(async () => {
   load()
@@ -111,4 +118,18 @@ html, body, #app { margin: 0; padding: 0; min-height: 100vh; background: #101014
 .cat-tag.ant-tag-checkable-checked { background: #1677ff; color: #fff; border-color: #1677ff; }
 .grid-area { flex: 1; padding: 14px 18px 8px; }
 .pager { display: flex; justify-content: center; padding: 20px 0 10px; }
+
+/* 移动端适配 */
+@media (max-width: 768px) {
+  .topbar { flex-wrap: wrap; gap: 8px 10px; padding: 8px 12px 4px; }
+  .brand { font-size: 17px; }
+  .search { flex: 1; min-width: 0; width: auto; }
+  .total { width: 100%; margin-left: 0; }
+  .cat-bar {
+    flex-wrap: nowrap; overflow-x: auto; padding: 4px 12px 8px;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cat-tag { white-space: nowrap; flex: 0 0 auto; }
+  .grid-area { padding: 10px 12px 6px; }
+}
 </style>

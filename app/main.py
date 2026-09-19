@@ -6,7 +6,7 @@ import json
 import logging
 
 from fastapi import FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import config, db, paths
@@ -106,6 +106,45 @@ def video_file(video_id: int):
 
 def _media_type(suffix: str) -> str:
     return {".mp4": "video/mp4", ".ts": "video/mp2t"}.get(suffix, "application/octet-stream")
+
+
+# 移动端「新标签页播放」页：极简全屏视频页（无 SPA 依赖）
+_WATCH_HTML = """<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{title}</title>
+<style>
+  html,body{{margin:0;padding:0;background:#000;color:#ddd;font-family:system-ui,sans-serif}}
+  header{{padding:8px 14px;font-size:14px;line-height:1.4;color:#bbb;
+          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+  video{{display:block;width:100vw;max-height:calc(100vh - 42px);object-fit:contain;background:#000}}
+  .warn{{padding:40px 20px;text-align:center}}
+  .warn a{{color:#1677ff}}
+</style></head><body>
+{body}
+</body></html>"""
+
+
+@app.get("/watch/{video_id}")
+def watch_page(video_id: int):
+    v = db.query_one(
+        """SELECT v.id, v.title, v.video_key, v.category_id, c.name AS category_name
+           FROM videos v JOIN categories c ON c.id = v.category_id WHERE v.id = ?""",
+        (video_id,),
+    )
+    if not v:
+        raise HTTPException(404, "视频不存在")
+    title = (v["title"] or v["video_key"])[:80]
+    f = paths.find_video_file(v["category_name"], v["video_key"])
+    if not f:
+        body = '<div class="warn">视频文件缺失</div>'
+    elif f.suffix == ".ts":
+        body = (f'<div class="warn">TS 格式不支持网页播放，'
+                f'<a href="/api/video-file/{video_id}" download>下载文件</a></div>')
+    else:
+        body = (f'<header>{title}</header>'
+                f'<video controls autoplay playsinline src="/api/video-file/{video_id}"></video>')
+    return HTMLResponse(_WATCH_HTML.format(title=title, body=body))
 
 
 # ---------------- 前端静态托管（SPA 回退，放最后注册） ----------------
