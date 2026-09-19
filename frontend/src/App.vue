@@ -41,7 +41,7 @@ function onInput(v) {
   searchTimer = setTimeout(() => onSearch(v), 300)
 }
 function onPage(p, ps) { page.value = p; pageSize.value = ps; load() }
-function onCategory() { page.value = 1; load() }
+function pickCategory(id) { categoryId.value = id; page.value = 1; load() }
 
 const playing = ref(null)
 function play(item) { playing.value = item }
@@ -53,24 +53,27 @@ onMounted(async () => {
 </script>
 
 <template>
-  <a-layout style="min-height: 100vh; background: #f5f5f5">
-    <a-layout-header class="header">
+  <div class="page">
+    <header class="topbar">
       <div class="brand">视频库</div>
-      <a-input-search class="search" placeholder="搜索标题 / ID" allow-clear enter-button
+      <a-input-search class="search" placeholder="搜索标题 / ID" allow-clear
                       :value="keyword" @input="onInput($event.target.value)" @search="onSearch" />
-      <a-select class="cat" v-model:value="categoryId" allow-clear show-search option-filter-prop="label"
-                placeholder="全部分类" @change="onCategory">
-        <a-select-opt-group v-for="g in grouped" :key="g.label" :label="g.label">
-          <a-select-option v-for="c in g.options" :key="c.id" :value="c.id"
-                           :label="`${c.name} (${c.count})`">
-            {{ c.name }}（{{ c.count }}）
-          </a-select-option>
-        </a-select-opt-group>
-      </a-select>
-      <span class="total">共 {{ total.toLocaleString() }} 个视频</span>
-    </a-layout-header>
+      <span class="total">共 {{ total.toLocaleString() }} 个</span>
+    </header>
 
-    <a-layout-content class="content">
+    <div class="cat-bar">
+      <a-checkable-tag class="cat-tag" :checked="categoryId === null" @change="pickCategory(null)">
+        全部（{{ categories.reduce((s, c) => s + c.count, 0) }}）
+      </a-checkable-tag>
+      <template v-for="g in grouped" :key="g.label">
+        <a-checkable-tag v-for="c in g.options" :key="c.id" class="cat-tag"
+                         :checked="categoryId === c.id" @change="pickCategory(c.id)">
+          {{ c.name }}（{{ c.count }}）
+        </a-checkable-tag>
+      </template>
+    </div>
+
+    <main class="grid-area">
       <a-spin :spinning="loading">
         <a-empty v-if="!loading && items.length === 0" description="没有匹配的视频" />
         <Gallery :items="items" @play="play" />
@@ -80,18 +83,32 @@ onMounted(async () => {
                         :show-total="t => `共 ${t} 个`" @change="onPage" />
         </div>
       </a-spin>
-    </a-layout-content>
+    </main>
 
     <Player :video="playing" @close="playing = null" />
-  </a-layout>
+  </div>
 </template>
 
 <style>
-.header { display: flex; align-items: center; gap: 16px; padding: 0 24px; background: #fff; }
-.brand { color: #1677ff; font-size: 18px; font-weight: 600; white-space: nowrap; }
-.search { width: 340px; }
-.cat { min-width: 240px; }
-.total { color: #999; font-size: 12px; white-space: nowrap; }
-.content { padding: 16px 24px; }
-.pager { display: flex; justify-content: center; padding: 24px 0 8px; }
+html, body, #app { margin: 0; padding: 0; min-height: 100vh; background: #101014; }
+.page { min-height: 100vh; display: flex; flex-direction: column; background: #101014; }
+.topbar {
+  display: flex; align-items: center; gap: 16px;
+  padding: 10px 18px 6px; color: #e6e6e6;
+}
+.brand { color: #1677ff; font-size: 20px; font-weight: 700; white-space: nowrap; }
+.search { width: 360px; }
+.total { color: #8a8a93; font-size: 12px; white-space: nowrap; margin-left: auto; }
+.cat-bar {
+  display: flex; flex-wrap: wrap; gap: 6px 4px;
+  padding: 2px 18px 10px; border-bottom: 1px solid #23232b;
+}
+.cat-tag {
+  font-size: 13px; padding: 3px 12px; border-radius: 999px;
+  background: #1d1d25; color: #c9c9d1; border: 1px solid #2c2c36;
+}
+.cat-tag:hover { color: #fff; }
+.cat-tag.ant-tag-checkable-checked { background: #1677ff; color: #fff; border-color: #1677ff; }
+.grid-area { flex: 1; padding: 14px 18px 8px; }
+.pager { display: flex; justify-content: center; padding: 20px 0 10px; }
 </style>
