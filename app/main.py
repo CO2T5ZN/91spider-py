@@ -22,6 +22,7 @@ log = logging.getLogger("gallery")
 app = FastAPI(title="video-gallery", docs_url=None, redoc_url=None)
 
 paths.warm_recent()  # 启动即预热最近视频的文件路径缓存（后台线程）
+db.warm_pages()      # 启动即预热数据库页缓存（后台线程）
 
 
 # ---------------- 封面：SSD 缓存 + 回源复制 + 后台预热 ----------------
