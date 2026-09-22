@@ -4,6 +4,11 @@ from __future__ import annotations
 
 import json
 import logging
+import mimetypes
+import shutil
+import threading
+import time
+from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, HTMLResponse
@@ -16,8 +21,72 @@ log = logging.getLogger("gallery")
 
 app = FastAPI(title="video-gallery", docs_url=None, redoc_url=None)
 
-if config.COVER_DIR.is_dir():
-    app.mount("/covers", StaticFiles(directory=config.COVER_DIR), name="covers")
+
+# ---------------- 封面：SSD 缓存 + 回源复制 + 后台预热 ----------------
+
+def _safe_cover_name(name: str) -> str | None:
+    if not name or "/" in name or "\\" in name or name.startswith("."):
+        return None
+    return name
+
+
+def _cover_in_cache(name: str) -> Path:
+    src = config.COVER_DIR / name
+    dst = config.COVER_CACHE_DIR / name
+    if dst.is_file() and dst.stat().st_size > 0:
+        return dst
+    if not src.is_file():
+        return dst
+    config.COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = dst.with_suffix(dst.suffix + ".part")
+    try:
+        shutil.copyfile(src, tmp)
+        tmp.replace(dst)
+    except OSError as e:  # noqa: BLE001 - 复制失败（盘忙/消失）按 404 处理
+        log.warning("封面回源复制失败 %s: %s", name, e)
+        tmp.unlink(missing_ok=True)
+        return src
+    return dst
+
+
+def _prewarm_covers() -> None:
+    """后台把数据目录的新封面逐步复制进本地缓存，避免请求时撞机械盘写高峰。"""
+    while True:
+        try:
+            if config.COVER_DIR.is_dir():
+                config.COVER_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+                for src in config.COVER_DIR.iterdir():
+                    if not src.is_file():
+                        continue
+                    dst = config.COVER_CACHE_DIR / src.name
+                    if not dst.exists() or dst.stat().st_size != src.stat().st_size:
+                        tmp = dst.with_suffix(dst.suffix + ".part")
+                        try:
+                            shutil.copyfile(src, tmp)
+                            tmp.replace(dst)
+                            time.sleep(0.2)  # 温和复制，不与下载抢盘
+                        except OSError:
+                            tmp.unlink(missing_ok=True)
+        except Exception as e:  # noqa: BLE001
+            log.warning("封面预热异常: %s", e)
+        time.sleep(120)
+
+
+@app.get("/covers/{name}")
+def covers(name: str):
+    clean = _safe_cover_name(name)
+    if not clean:
+        raise HTTPException(404, "not found")
+    f = _cover_in_cache(clean)
+    if not f.is_file():
+        raise HTTPException(404, "cover not found")
+    media_type = mimetypes.guess_type(clean)[0] or "image/jpeg"
+    # 封面按 video_key 命名、生成后不再变化，浏览器可长缓存
+    return FileResponse(f, media_type=media_type,
+                        headers={"Cache-Control": "public, max-age=604800, immutable"})
+
+
+threading.Thread(target=_prewarm_covers, name="cover-prewarm", daemon=True).start()
 
 
 def parse_tags(raw: str | None) -> list[str]:
@@ -101,7 +170,8 @@ def video_file(video_id: int):
     if not f:
         raise HTTPException(404, "视频文件缺失")
     # FileResponse 原生处理 Range 头（206 分段），浏览器可拖进度条
-    return FileResponse(f, media_type=_media_type(f.suffix), filename=f.name)
+    return FileResponse(f, media_type=_media_type(f.suffix), filename=f.name,
+                        headers={"Cache-Control": "public, max-age=86400"})
 
 
 def _media_type(suffix: str) -> str:
