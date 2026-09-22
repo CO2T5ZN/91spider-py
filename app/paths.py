@@ -73,7 +73,7 @@ def find_video_file(category_name: str, video_key: str) -> Path | None:
     return hit[1]  # 立即返回（可能是旧值），后台刷新
 
 
-def warm_recent(limit: int = 500) -> None:
+def warm_recent(limit: int = 5000) -> None:
     """启动后台预热：为最近的任务视频填充文件缓存，避免重启后首批请求撞盘。"""
 
     def run():
