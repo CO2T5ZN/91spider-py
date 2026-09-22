@@ -21,6 +21,8 @@ log = logging.getLogger("gallery")
 
 app = FastAPI(title="video-gallery", docs_url=None, redoc_url=None)
 
+paths.warm_recent()  # 启动即预热最近视频的文件路径缓存（后台线程）
+
 
 # ---------------- 封面：SSD 缓存 + 回源复制 + 后台预热 ----------------
 
@@ -51,6 +53,7 @@ def _cover_in_cache(name: str) -> Path:
 
 def _prewarm_covers() -> None:
     """后台把数据目录的新封面逐步复制进本地缓存，避免请求时撞机械盘写高峰。"""
+    time.sleep(15)  # 错开启动时的文件路径预热，降低对机械盘的瞬时压力
     while True:
         try:
             if config.COVER_DIR.is_dir():

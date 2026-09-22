@@ -11,10 +11,12 @@ from . import config, db
 
 _UNSAFE = re.compile(r'[\\/:*?"<>|]')
 
-# 视频文件探测结果缓存：视频文件落盘后路径不变，缓存可让翻页完全不碰
-# 数据盘（机械盘与下载写入共用，繁忙时一次 stat 也可能卡数秒）
+# 视频文件探测缓存：数据盘（机械盘）与下载写入共用，繁忙时一次 stat 都可能卡数秒。
+# 策略：首次探测同步做；之后永远秒回缓存值，TTL 过期由后台线程刷新（stale-while-revalidate），
+# 保证翻页请求绝不因盘繁忙而卡顿。
 _file_cache: dict[str, tuple[float, Path | None]] = {}
 _file_cache_lock = threading.Lock()
+_refreshing: set[str] = set()
 _FILE_TTL = 60.0
 
 
@@ -32,29 +34,62 @@ def video_root() -> Path:
     return Path(val) if val else config.DATA_DIR / "videos"
 
 
-def find_video_file(category_name: str, video_key: str) -> Path | None:
-    """在视频根目录/分类目录下按 mp4→ts 顺序探测文件；不存在返回 None。
+def _probe(root: Path, category_name: str, video_key: str) -> Path | None:
+    base = root / safe_name(category_name)
+    for ext in (".mp4", ".ts"):
+        p = base / f"{video_key}{ext}"
+        if p.is_file():
+            return p
+    return None
 
-    结果带 TTL 缓存：同一进程内 60 秒内重复探测直接用缓存。
-    """
-    root = str(video_root())
+
+def _refresh(cache_key: str, root: Path, category_name: str, video_key: str) -> None:
+    try:
+        f = _probe(root, category_name, video_key)
+        with _file_cache_lock:
+            _file_cache[cache_key] = (time.monotonic(), f)
+    finally:
+        with _file_cache_lock:
+            _refreshing.discard(cache_key)
+
+
+def find_video_file(category_name: str, video_key: str) -> Path | None:
+    root = video_root()
     cache_key = f"{root}|{safe_name(category_name)}|{video_key}"
     now = time.monotonic()
     with _file_cache_lock:
         hit = _file_cache.get(cache_key)
-        if hit and now - hit[0] < _FILE_TTL:
-            return hit[1]
-    f = None
-    base = Path(root) / safe_name(category_name)
-    for ext in (".mp4", ".ts"):
-        p = base / f"{video_key}{ext}"
-        if p.is_file():
-            f = p
-            break
-    with _file_cache_lock:
-        _file_cache[cache_key] = (now, f)
-        # 简单防膨胀：超过 1 万条时清掉过期项
-        if len(_file_cache) > 10000:
-            for k in [k for k, v in _file_cache.items() if now - v[0] >= _FILE_TTL]:
-                _file_cache.pop(k, None)
-    return f
+    if hit is None:
+        # 首次见到的条目：同步探测一次
+        f = _probe(root, category_name, video_key)
+        with _file_cache_lock:
+            _file_cache[cache_key] = (now, f)
+        return f
+    if now - hit[0] >= _FILE_TTL and cache_key not in _refreshing:
+        with _file_cache_lock:
+            _refreshing.add(cache_key)
+        threading.Thread(target=_refresh, args=(cache_key, root, category_name, video_key),
+                         daemon=True).start()
+    return hit[1]  # 立即返回（可能是旧值），后台刷新
+
+
+def warm_recent(limit: int = 500) -> None:
+    """启动后台预热：为最近的任务视频填充文件缓存，避免重启后首批请求撞盘。"""
+
+    def run():
+        time.sleep(1.0)
+        try:
+            rows = db.query_all(
+                """SELECT v.video_key, c.name AS cat FROM videos v
+                   JOIN categories c ON c.id = v.category_id
+                   WHERE v.status = 'done'
+                   ORDER BY v.updated_at DESC, v.id DESC LIMIT ?""", (limit,))
+            for r in rows:
+                find_video_file(r["cat"], r["video_key"])
+                time.sleep(0.05)
+            log = __import__("logging").getLogger("gallery.paths")
+            log.info("文件路径预热完成：%d 条", len(rows))
+        except Exception as e:  # noqa: BLE001
+            print(f"预热异常: {e}")
+
+    threading.Thread(target=run, name="filepath-warm", daemon=True).start()
