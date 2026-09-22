@@ -16,11 +16,11 @@ video_spider 下载视频的展示站：与下载机**完全分离**的独立项
 
 | 内容 | 来源 |
 | --- | --- |
-| 数据库 | 与 video_spider 同一个 `spider.db`，**只读**打开（`?mode=ro`），WAL 下与下载机并发互不阻塞 |
+| 数据库 | 后台每 60s 用 SQLite backup API 把 spider 的 `spider.db` 快照到本地盘（`.db-cache/`），**查询走快照**——数据盘（机械盘）与下载写入共用、繁忙时读一次都可能卡数秒，走快照后查询稳定毫秒级；数据延迟 ≤60s |
 | 数据目录 | 复用同一个环境变量 `VIDEO_SPIDER_DATA`（默认 `./data`） |
-| 保存位置 | 实时读取 spider 的 `settings.video_dir`，下载机改了保存位置无需重启本服务 |
-| 封面 | `DATA_DIR/covers/` 静态挂载在 `/covers` |
-| 视频 | `settings.video_dir`（默认 `DATA_DIR/videos`）`/<分类名>/<video_key>.mp4`（回退 `.ts`） |
+| 保存位置 | 周期读快照中的 `settings.video_dir`，下载机改了保存位置自动跟随 |
+| 封面 | 后台预热线程把 `covers/` 拷进本地 SSD 缓存（`.cover-cache/`），请求只读缓存 + `Cache-Control: immutable`；未命中的即时回源复制一次 |
+| 视频 | `settings.video_dir`（默认 `DATA_DIR/videos`）`/<分类名>/<video_key>.mp4`（回退 `.ts`），Range 流式播放；文件探测结果带 stale-while-revalidate 缓存 |
 
 ## 启动
 
