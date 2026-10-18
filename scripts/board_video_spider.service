@@ -1,0 +1,24 @@
+[Unit]
+Description=Video Spider panel/downloader (FastAPI)
+Documentation=file:/userdata/video-spider/README.md
+After=network-online.target
+Wants=network-online.target
+# 数据目录在 SD 卡上：等 /mnt/sd 挂载好再启动
+RequiresMountsFor=/mnt/sd
+
+[Service]
+User=linaro
+WorkingDirectory=/userdata/video-spider
+Environment=VIDEO_SPIDER_HOST=0.0.0.0
+Environment=VIDEO_SPIDER_PORT=8765
+Environment=VIDEO_SPIDER_DATA=/mnt/sd/video-spider-data
+# 站点被墙且 DNS 污染，爬虫流量走板上 clash（clash 内部按规则分流：被墙域名走节点，国内 CDN 直连）
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=localhost,127.0.0.1
+ExecStart=/userdata/video-spider/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

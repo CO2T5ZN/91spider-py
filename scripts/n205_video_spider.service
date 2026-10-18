@@ -1,0 +1,24 @@
+[Unit]
+Description=Video Spider panel/downloader (FastAPI) on 205
+Documentation=file:/opt/video-spider/README.md
+After=network-online.target
+Wants=network-online.target
+# 数据（数据库+视频）在移动硬盘上：等 /mnt/hdd 挂载好再启动
+RequiresMountsFor=/mnt/hdd
+
+[Service]
+User=sa
+WorkingDirectory=/opt/video-spider
+Environment=VIDEO_SPIDER_HOST=0.0.0.0
+Environment=VIDEO_SPIDER_PORT=8765
+Environment=VIDEO_SPIDER_DATA=/mnt/hdd/video-spider-data
+# 站点被墙且 DNS 污染，爬虫流量走本机 clash（clash 按规则分流：被墙走节点，国内 CDN 直连）
+Environment=HTTPS_PROXY=http://127.0.0.1:7890
+Environment=HTTP_PROXY=http://127.0.0.1:7890
+Environment=NO_PROXY=localhost,127.0.0.1
+ExecStart=/opt/video-spider/.venv/bin/python main.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

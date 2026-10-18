@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>91porna 下载助手 - 设置</title>
+  <style>
+    body { font-family: sans-serif; padding: 24px; width: 380px; }
+    label { display: block; margin-bottom: 6px; font-weight: 600; }
+    input { width: 100%; padding: 6px 8px; box-sizing: border-box; }
+    button { margin-top: 12px; padding: 6px 18px; }
+    .tip { color: #666; font-size: 12px; margin-top: 10px; }
+    #saved { color: #2e7d32; margin-left: 10px; }
+  </style>
+</head>
+<body>
+  <label for="server">下载服务地址</label>
+  <input id="server" placeholder="http://127.0.0.1:8765" />
+  <button id="save">保存</button><span id="saved"></span>
+  <p class="tip">video-spider 后端面板地址（不带 /api 后缀）。修改后刷新视频详情页生效。</p>
+  <script src="options.js"></script>
+</body>
+</html>
