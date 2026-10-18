@@ -1,0 +1,18 @@
+# 编辑器 / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# AI 助手 / IDE scratch
+.codebuddy/
+.zcode/
+
+# Python
+__pycache__/
+*.py[oc]
+.venv/
+venv/
+
+# 子项目各自的 data / 运行时产物，子项目内 .gitignore 已覆盖
+# 这里只是兜底
