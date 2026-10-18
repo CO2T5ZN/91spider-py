@@ -1,0 +1,55 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+.vite/
+*.local
+
+# Runtime data (database, downloads, temp segments)
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Downloaded media
+*.mp4
+*.ts
+*.m3u8
+
+# Logs & env
+logs/
+*.log
+.env
+.env.*
+
+# Dev board credentials (plaintext password, never commit)
+board.json
+BOARD.md
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ad-hoc debug dump
+5
+
+
+# AI assistant / IDE scratch
+.codebuddy/
+.zcode/
+

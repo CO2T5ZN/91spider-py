@@ -1,0 +1,15 @@
+# clash/mihomo 通用设置（板子 192.168.1.203 /etc/clash/base.yaml 的项目侧副本）。
+# 订阅文件只提供 proxies/proxy-groups/rules 三段，
+# 板上 /etc/clash/config.yaml = base.yaml + sub.yaml 顺序拼接（见板上 /usr/local/bin/update-clash-sub.sh），
+# 因此本文件不能再出现这三个键。
+mixed-port: 7890                        # HTTP + SOCKS5 混合代理端口
+allow-lan: true                         # 允许局域网设备（含本机 Windows）走该代理
+bind-address: "*"
+mode: rule
+log-level: info
+ipv6: false
+external-controller: "0.0.0.0:9090"     # REST API（yacd/metacubexd 面板用）
+unified-delay: true
+tcp-concurrent: true
+profile:
+  store-selected: true                  # 重启后记住手动选择的节点

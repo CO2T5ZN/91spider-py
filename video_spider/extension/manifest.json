@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "91porna 下载助手",
+  "description": "视频详情页一键提交到本地下载服务（需运行 video-spider 后端）",
+  "version": "1.0.0",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://91porna.com/comic/index/detail*",
+        "https://91porna.com/comic/index/avdetail*",
+        "https://91porna.com/melonshort/video/*",
+        "https://91porna.com/heiliao-chigua/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*"
+  ],
+  "options_page": "options.html"
+}
