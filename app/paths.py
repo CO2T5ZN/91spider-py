@@ -25,27 +25,47 @@ def safe_name(name: str) -> str:
     return _UNSAFE.sub("", name).strip() or "unknown"
 
 
-def video_root() -> Path:
-    """视频保存根目录：spider settings.video_dir 非空则用之，否则默认 DATA_DIR/videos。
+def video_roots() -> list[Path]:
+    """候选视频保存根目录（多硬盘支持，跟随 spider 的 settings）。
 
-    实时读 settings（有短 TTL 缓存），下载机切换保存位置后无需重启本服务。
+    优先级：settings.video_dirs（每行/分号一个）> 旧 settings.video_dir > 默认 DATA_DIR/videos。
     """
-    val = (db.get_settings().get("video_dir") or "").strip()
-    return Path(val) if val else config.DATA_DIR / "videos"
+    settings = db.get_settings()
+    roots: list[Path] = []
+    raw = (settings.get("video_dirs") or "").strip()
+    if raw:
+        for line in re.split(r"[\r\n;]+", raw):
+            line = line.strip()
+            if line:
+                roots.append(Path(line))
+    val = (settings.get("video_dir") or "").strip()
+    if val:
+        roots.append(Path(val))
+    roots.append(config.DATA_DIR / "videos")
+    seen: set[str] = set()
+    out: list[Path] = []
+    for r in roots:
+        k = str(r)
+        if k not in seen:
+            seen.add(k)
+            out.append(r)
+    return out
 
 
-def _probe(root: Path, category_name: str, video_key: str) -> Path | None:
-    base = root / safe_name(category_name)
-    for ext in (".mp4", ".ts"):
-        p = base / f"{video_key}{ext}"
-        if p.is_file():
-            return p
+def _probe(roots: list[Path], category_name: str, video_key: str) -> Path | None:
+    """在所有候选根目录下探测视频文件（移动硬盘可能挂载点变化，逐根找）。"""
+    base = safe_name(category_name)
+    for root in roots:
+        for ext in (".mp4", ".ts"):
+            p = root / base / f"{video_key}{ext}"
+            if p.is_file():
+                return p
     return None
 
 
-def _refresh(cache_key: str, root: Path, category_name: str, video_key: str) -> None:
+def _refresh(cache_key: str, roots: list[Path], category_name: str, video_key: str) -> None:
     try:
-        f = _probe(root, category_name, video_key)
+        f = _probe(roots, category_name, video_key)
         with _file_cache_lock:
             _file_cache[cache_key] = (time.monotonic(), f)
     finally:
@@ -54,21 +74,21 @@ def _refresh(cache_key: str, root: Path, category_name: str, video_key: str) -> 
 
 
 def find_video_file(category_name: str, video_key: str) -> Path | None:
-    root = video_root()
-    cache_key = f"{root}|{safe_name(category_name)}|{video_key}"
+    roots = video_roots()
+    cache_key = f"{'|'.join(str(r) for r in roots)}|{safe_name(category_name)}|{video_key}"
     now = time.monotonic()
     with _file_cache_lock:
         hit = _file_cache.get(cache_key)
     if hit is None:
         # 首次见到的条目：同步探测一次
-        f = _probe(root, category_name, video_key)
+        f = _probe(roots, category_name, video_key)
         with _file_cache_lock:
             _file_cache[cache_key] = (now, f)
         return f
     if now - hit[0] >= _FILE_TTL and cache_key not in _refreshing:
         with _file_cache_lock:
             _refreshing.add(cache_key)
-        threading.Thread(target=_refresh, args=(cache_key, root, category_name, video_key),
+        threading.Thread(target=_refresh, args=(cache_key, roots, category_name, video_key),
                          daemon=True).start()
     return hit[1]  # 立即返回（可能是旧值），后台刷新
 

@@ -189,15 +189,55 @@ _WATCH_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{title}</title>
 <style>
-  html,body{{margin:0;padding:0;background:#000;color:#ddd;font-family:system-ui,sans-serif}}
+  html,body{{margin:0;padding:0;height:100%;background:#000;color:#ddd;font-family:system-ui,sans-serif}}
+  body{{display:flex;flex-direction:column;justify-content:center}}
   header{{padding:8px 14px;font-size:14px;line-height:1.4;color:#bbb;
           white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+  .stage{{position:relative}}
   video{{display:block;width:100vw;max-height:calc(100vh - 42px);object-fit:contain;background:#000}}
   .warn{{padding:40px 20px;text-align:center}}
   .warn a{{color:#1677ff}}
+  #seekHint{{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+             background:rgba(0,0,0,.72);color:#fff;font-size:15px;padding:10px 18px;
+             border-radius:10px;pointer-events:none;white-space:nowrap;display:none}}
+  #seekHint .time{{color:#9ecbff;margin-left:8px}}
 </style></head><body>
 {body}
+<script>{seek_js}</script>
 </body></html>"""
+
+# 播放页触摸手势：画面上左右滑动快进/快退（右滑 +，左滑 -），与 Player.vue 行为一致
+_SEEK_JS = """
+(function(){
+  var v=document.querySelector('video');
+  if(!v)return;
+  var hint=document.getElementById('seekHint');
+  var box=hint?hint.parentElement:v.parentElement;
+  var SWIPE=24,SPEED=0.2;
+  var tx=0,ty=0,t0=0,active=false,target=null,timer=null;
+  function fmt(s){if(!isFinite(s))return '-';s=Math.max(0,Math.floor(s));
+    var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
+    var mm=(m<10?'0':'')+m,ss=(x<10?'0':'')+x;return h?h+':'+mm+':'+ss:mm+':'+ss;}
+  function show(fwd,t){if(!hint)return;target=t;
+    hint.innerHTML=(fwd?'\\u23e9 \\u5feb\\u8fdb':'\\u23ea \\u5feb\\u9000')+
+      '<span class="time">'+fmt(t)+' / '+fmt(v.duration)+'</span>';
+    hint.style.display='block';}
+  function hide(){if(hint)hint.style.display='none';target=null;}
+  v.addEventListener('touchstart',function(e){var t=e.touches[0];
+    tx=t.clientX;ty=t.clientY;t0=v.currentTime;active=false;},{passive:true});
+  v.addEventListener('touchmove',function(e){
+    var t=e.touches[0],dx=t.clientX-tx,dy=t.clientY-ty;
+    if(!active){if(Math.abs(dx)<SWIPE||Math.abs(dx)<=Math.abs(dy))return;active=true;}
+    e.preventDefault();
+    show(dx>0,Math.min(Math.max(t0+dx*SPEED,0),v.duration||0));
+    clearTimeout(timer);timer=setTimeout(hide,1200);
+  },{passive:false});
+  v.addEventListener('touchend',function(){
+    if(active&&target!=null)v.currentTime=target;
+    hide();active=false;});
+  v.addEventListener('touchcancel',function(){hide();active=false;});
+})();
+"""
 
 
 @app.get("/watch/{video_id}")
@@ -213,13 +253,18 @@ def watch_page(video_id: int):
     f = paths.find_video_file(v["category_name"], v["video_key"])
     if not f:
         body = '<div class="warn">视频文件缺失</div>'
+        seek_js = ""
     elif f.suffix == ".ts":
         body = (f'<div class="warn">TS 格式不支持网页播放，'
                 f'<a href="/api/video-file/{video_id}" download>下载文件</a></div>')
+        seek_js = ""
     else:
         body = (f'<header>{title}</header>'
-                f'<video controls autoplay playsinline src="/api/video-file/{video_id}"></video>')
-    return HTMLResponse(_WATCH_HTML.format(title=title, body=body))
+                f'<div class="stage"><video controls autoplay playsinline '
+                f'src="/api/video-file/{video_id}"></video>'
+                f'<div id="seekHint"></div></div>')
+        seek_js = _SEEK_JS
+    return HTMLResponse(_WATCH_HTML.format(title=title, body=body, seek_js=seek_js))
 
 
 # ---------------- 前端静态托管（SPA 回退，放最后注册） ----------------
