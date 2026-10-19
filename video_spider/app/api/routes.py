@@ -7,6 +7,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -313,18 +314,54 @@ def put_settings(body: SettingsBody) -> dict:
 
 # ---------------- 磁盘 / 保存位置 ----------------
 
+# videos_size 全量 rglob 在大盘冷读时要几十上百秒，改为缓存 + 后台线程刷新：
+# 接口立即返回上次结果（首次为 None），前端显示 "-"，刷新后自动补上
+_SIZE_TTL = 600
+_size_cache: dict[str, tuple[float, int | None]] = {}
+_size_refreshing: set[str] = set()
+_size_lock = threading.Lock()
+
+
+def _refresh_videos_size(root: Path) -> None:
+    key = str(root)
+    total = 0
+    for p in root.rglob("*"):
+        try:
+            if p.is_file():
+                total += p.stat().st_size
+        except OSError:  # noqa: BLE001 - 单个文件取不到大小不影响整体
+            continue
+    with _size_lock:
+        _size_cache[key] = (time.time(), total)
+        _size_refreshing.discard(key)
+
+
+def _videos_size_cached(root: Path) -> int | None:
+    """过期或首次时后台刷新，立即返回旧值（首次为 None，前端显示 '-'）。"""
+    key = str(root)
+    with _size_lock:
+        hit = _size_cache.get(key)
+        fresh = bool(hit) and time.time() - hit[0] < _SIZE_TTL
+        if not fresh and key not in _size_refreshing:
+            _size_refreshing.add(key)
+            threading.Thread(target=_refresh_videos_size, args=(root,),
+                             name=f"size-{root.name}", daemon=True).start()
+        return hit[1] if hit else None
+
+
 @router.get("/disk")
 def disk_info() -> dict:
     """所有候选保存目录及所在磁盘用量。
 
     save_path 为下次保存将使用的盘；default_root 为设置的固定默认盘（空 = 动态选盘）。
+    videos_size 为后台统计的缓存值（首次请求时为 null，稍后刷新）。
     """
     default_root = (db.get_settings().get("video_root_default") or "").strip()
     default_key = os.path.normcase(str(Path(default_root))) if default_root else ""
     disks = []
     for root in manager.video_roots():
         entry: dict = {"path": str(root), "total": 0, "used": 0,
-                       "free": 0, "videos_size": 0, "error": None,
+                       "free": 0, "videos_size": None, "error": None,
                        "writable": False, "is_default": os.path.normcase(str(root)) == default_key}
         try:
             root.mkdir(parents=True, exist_ok=True)
@@ -334,12 +371,7 @@ def disk_info() -> dict:
             entry["error"] = str(e)  # 盘未挂载/已拔出：仍返回条目供前端展示
         else:
             entry["writable"] = manager.writable_free(root, warn=False) is not None
-            for p in root.rglob("*"):
-                try:
-                    if p.is_file():
-                        entry["videos_size"] += p.stat().st_size
-                except OSError:  # noqa: BLE001 - 单个文件取不到大小不影响整体
-                    continue
+            entry["videos_size"] = _videos_size_cached(root)
         disks.append(entry)
     settings = db.get_settings()
     return {"save_path": str(manager.choose_video_root()),
