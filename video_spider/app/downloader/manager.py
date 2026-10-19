@@ -36,6 +36,9 @@ class TaskRuntime:
         self.lock = threading.Lock()
         self.stop_event = threading.Event()
         self.enum_done = threading.Event()
+        self.finished = threading.Event()   # 任务自然完结（completed）：运行时可被新运行时替换
+        self.is_retry_pass = False          # 本轮是否为自动重试轮（完结后不再触发自动重试）
+        self.auto_retry_done = False        # 防止重复触发自动重试
         self.client = SiteClient()
         self.pool = DynamicPool(self._worker, thread_count, name=f"task{task_id}")
         self.enum_thread: threading.Thread | None = None
@@ -54,9 +57,11 @@ class TaskRuntime:
             return
         p = db.video_status_summary(self.category_id)
         if p["total"] > 0 and p["pending"] == 0 and p["downloading"] == 0:
-            db.update_task(self.task_id, state="completed")
-            events.publish_log("info", f"任务 #{self.task_id} 全部完成")
-            events.publish("task", {"task": db.get_task(self.task_id)})
+            with self.lock:
+                if self.finished.is_set():
+                    return
+                self.finished.set()
+            DownloadManager._complete_task(self, p)
 
 
 class DownloadManager:
@@ -93,17 +98,23 @@ class DownloadManager:
         return db.get_task(task_id)
 
     @classmethod
-    def start_task(cls, task_id: int) -> None:
+    def start_task(cls, task_id: int, note: str | None = None, retry_pass: bool = False) -> None:
         task = db.get_task(task_id)
         if not task:
             raise ValueError("任务不存在")
         with cls._lock:
             rt = cls._runtimes.get(task_id)
-            if rt and rt.pool and not rt.stop_event.is_set():
+            if rt and not rt.stop_event.is_set() and not rt.finished.is_set():
                 return  # 已在运行
+            old = rt
             rt = TaskRuntime(task_id, task["category_id"], task["thread_count"])
+            rt.is_retry_pass = retry_pass
             cls._runtimes[task_id] = rt
-        db.update_task(task_id, state="running", note=None)
+        if old is not None:
+            # 已完结的旧运行时：收尾线程后由新运行时替换（每日增量/自动重试会重启已完成任务）
+            old.stop_event.set()
+            old.pool.stop()
+        db.update_task(task_id, state="running", note=note)
         rt.enum_thread = threading.Thread(
             target=cls._enumerate, args=(rt,), name=f"task{task_id}-enum", daemon=True)
         rt.enum_thread.start()
@@ -154,6 +165,39 @@ class DownloadManager:
         if task["state"] in ("completed", "stopped"):
             db.update_task(task_id, state="paused", note="失败项已重置，点击继续重跑")
         events.publish("task", {"task": db.get_task(task_id)})
+
+    @classmethod
+    def _complete_task(cls, rt: TaskRuntime, p: dict) -> None:
+        """任务自然完结：置 completed 并按需触发自动重试（p 为完成时的状态汇总）。"""
+        rt.finished.set()  # 幂等：完结的运行时才允许被 start_task 替换（每日增量/自动重试）
+        db.update_task(rt.task_id, state="completed")
+        events.publish_log("info", f"任务 #{rt.task_id} 全部完成")
+        events.publish("task", {"task": db.get_task(rt.task_id)})
+        cls._maybe_auto_retry(rt, p)
+
+    @classmethod
+    def _maybe_auto_retry(cls, rt: TaskRuntime, p: dict) -> None:
+        """队列正常下载完后自动把失败项重试一遍；重试轮自身完结后不再触发（防循环）。"""
+        if rt.is_retry_pass or rt.auto_retry_done:
+            return
+        if db.get_settings().get("auto_retry_failed", "1") != "1":
+            return
+        if not p.get("failed"):
+            return
+        with rt.lock:
+            if rt.auto_retry_done:
+                return
+            rt.auto_retry_done = True
+        n_failed = p["failed"]
+        events.publish_log("info", f"任务 #{rt.task_id} 自动重试 {n_failed} 个失败视频")
+        # 旧运行时已完结：收尾并移除，再以重试轮重启（start_task 会注册新运行时）
+        rt.stop_event.set()
+        rt.pool.stop()
+        with cls._lock:
+            if cls._runtimes.get(rt.task_id) is rt:
+                del cls._runtimes[rt.task_id]
+        cls.retry_failed(rt.task_id)
+        cls.start_task(rt.task_id, note=f"自动重试 {n_failed} 个失败项", retry_pass=True)
 
     # ---------------- 枚举 ----------------
 
@@ -209,8 +253,10 @@ class DownloadManager:
             if not rt.stop_event.is_set():
                 p = db.video_status_summary(rt.category_id)
                 if p["total"] > 0 and p["pending"] == 0 and p["downloading"] == 0:
-                    db.update_task(rt.task_id, state="completed")
-                    events.publish("task", {"task": db.get_task(rt.task_id)})
+                    with rt.lock:
+                        if not rt.finished.is_set():
+                            rt.finished.set()
+                            DownloadManager._complete_task(rt, p)
 
     @classmethod
     def _wait_batch_done(cls, rt: TaskRuntime, batch: list[int]) -> None:
@@ -472,7 +518,8 @@ def _category_name(category_id: int) -> str:
 def video_roots() -> list[Path]:
     """所有候选视频保存根目录（多硬盘支持）。
 
-    优先级：settings.video_dirs（每行/分号一个）> 旧 settings.video_dir > 默认 VIDEO_DIR。
+    优先级：settings.video_dirs（每行/分号一个）> 旧 settings.video_dir。
+    有显式配置时不再追加默认 VIDEO_DIR（避免同一块盘出现两个候选路径）；
     每个视频完成时实时读取，增删保存位置后无需重启。
     """
     settings = db.get_settings()
@@ -486,7 +533,8 @@ def video_roots() -> list[Path]:
     val = (settings.get("video_dir") or "").strip()
     if val:
         roots.append(Path(val))
-    roots.append(Path(config.VIDEO_DIR))
+    if not roots:
+        roots.append(Path(config.VIDEO_DIR))
     seen: set[str] = set()
     out: list[Path] = []
     for r in roots:
@@ -500,24 +548,46 @@ def video_roots() -> list[Path]:
 MIN_FREE_BYTES = 5 * 1024**3  # 候选盘剩余空间低于此值时降级为最后选择
 
 
-def choose_video_root() -> Path:
-    """为本次保存选盘：可写候选中剩余空间最大者（多硬盘）。
+def writable_free(root: Path, warn: bool = True) -> int | None:
+    """目录可写（建目录 + 写测试）则返回剩余字节；不可用返回 None。
 
-    移动硬盘可能未挂载/已拔出：目录建不了或写测试失败即跳过该候选；
+    移动硬盘可能未挂载/已拔出（或只读挂载）。
+    """
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+        probe = root / ".write-test"
+        probe.write_bytes(b"")
+        probe.unlink(missing_ok=True)
+        return shutil.disk_usage(root).free
+    except OSError as e:
+        if warn:
+            log.warning("保存目录不可用，跳过：%s（%s）", root, e)
+        return None
+
+
+def choose_video_root() -> Path:
+    """为本次保存选盘：设置了默认盘且可用则固定用之，否则可写候选中剩余空间最大者。
+
+    默认盘不可写或剩余不足 5GB 时回退动态选盘并记日志；
     所有盘剩余都不足 5GB 时仍选剩余最大的一块（避免任务直接失败）。
     """
+    default = (db.get_settings().get("video_root_default") or "").strip()
+    if default:
+        root = Path(default)
+        free = writable_free(root)
+        if free is not None:
+            if free < MIN_FREE_BYTES:
+                log.warning("默认保存目录剩余不足 5GB（%dGB），回退动态选盘：%s",
+                            free // 1024**3, root)
+            else:
+                return root
+        else:
+            log.warning("默认保存目录不可用，回退动态选盘：%s", root)
     candidates: list[tuple[int, Path]] = []
     for root in video_roots():
-        try:
-            root.mkdir(parents=True, exist_ok=True)
-            probe = root / ".write-test"
-            probe.write_bytes(b"")
-            probe.unlink(missing_ok=True)
-            free = shutil.disk_usage(root).free
-        except OSError as e:
-            log.warning("保存目录不可用，跳过：%s（%s）", root, e)
-            continue
-        candidates.append((free, root))
+        free = writable_free(root)
+        if free is not None:
+            candidates.append((free, root))
     if candidates:
         candidates.sort(reverse=True)
         free, root = candidates[0]

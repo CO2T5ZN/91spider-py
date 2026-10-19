@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config, db, events
 from .api.routes import router
-from .downloader import manager
+from .downloader import daily_update, manager
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s [%(threadName)s] %(name)s: %(message)s")
@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
     db.init()
     events.init(asyncio.get_running_loop())
     manager.recover()
+    daily_update.start()
     yield
 
 

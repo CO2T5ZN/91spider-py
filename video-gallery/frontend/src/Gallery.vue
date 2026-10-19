@@ -24,7 +24,7 @@ function coverOf(item) {
           <img v-if="coverOf(item)" :src="coverOf(item)" loading="lazy" alt="">
           <div v-else class="cover-fallback">无封面</div>
           <a-tag class="cat-badge" color="blue">{{ item.category_name }}</a-tag>
-          <span v-if="item.ext === 'ts'" class="ts-badge" title="TS 格式浏览器不支持在线播放">TS</span>
+          <span v-if="item.ext === 'ts'" class="ts-badge" title="TS 格式：经 mpegts.js 在线播放">TS</span>
         </div>
         <div class="body">
           <div class="title" :title="item.title">{{ item.title }}</div>

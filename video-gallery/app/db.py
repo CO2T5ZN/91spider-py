@@ -63,12 +63,12 @@ def _refresh_snapshot() -> None:
         with dst_conn:
             src.backup(dst_conn)
         dst_conn.close()
-        os.replace(str(tmp), str(dst))
         global _conn
         with _lock:
             if _conn is not None:
                 _conn.close()
-                _conn = None  # 下一次查询重开在新快照上
+                _conn = None  # 先松手：Windows 下无法 os.replace 替换仍被打开的库文件（Linux 无此限制）
+        os.replace(str(tmp), str(dst))
     finally:
         src.close()
 

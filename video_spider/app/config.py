@@ -32,6 +32,11 @@ DEFAULT_SETTINGS = {
     "request_delay": "0.15",  # 同主机请求最小间隔（秒）
     "keep_segments": "0",     # 合并成功后是否保留分片
     "video_dir": "",          # 合并视频保存根目录；空 = 默认 VIDEO_DIR（实时生效，无需重启）
+    "video_dirs": "",         # 候选保存根目录列表（每行/分号一个），多硬盘支持
+    "video_root_default": "", # 固定默认保存盘；空 = 每个视频动态选剩余空间最大的可写盘
+    "auto_retry_failed": "1", # 任务正常完成后自动把失败视频重试一遍（仅一遍）
+    "daily_update": "1",      # 每日增量检查已完成任务：对比站点列表，新增则自动下载
+    "daily_update_time": "04:00",  # 每日增量检查时刻 HH:MM
     "output_format": "mp4",   # 最终产物格式：mp4（ffmpeg 转封装，失败保留 ts）| ts
 }
 

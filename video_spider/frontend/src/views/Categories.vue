@@ -114,7 +114,8 @@ onMounted(() => {
         <a-checkbox v-model:checked="withCounts" :disabled="store.sync.running">
           同时抓取各分类视频总数（约50个请求）
         </a-checkbox>
-        <a-input-search v-model:value="keyword" placeholder="搜索名称/路径" style="width: 240px" />
+        <a-input-search v-model:value="keyword" placeholder="搜索名称/路径"
+                        style="width: 240px; max-width: 100%" />
         <span v-if="store.sync.running">
           计数进度：{{ store.sync.done }} / {{ store.sync.total }}
         </span>
@@ -126,6 +127,7 @@ onMounted(() => {
              message="还没有分类数据，点击「同步分类」从首页提取。" />
 
     <a-table :data-source="filtered" :columns="columns" row-key="id" size="middle"
+             :scroll="{ x: 860 }"
              :pagination="{ pageSize: 50, showSizeChanger: false }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">

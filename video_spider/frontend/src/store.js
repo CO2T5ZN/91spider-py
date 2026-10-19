@@ -9,6 +9,7 @@ export const store = reactive({
   sync: { running: false, done: 0, total: 0, phase: '' },
   settings: {},
   videos: {},                // { [category_id]: video[] }，任务抽屉打开时加载
+  videosSummary: {},         // { [category_id]: {total,pending,downloading,done,failed} }，随 loadVideos 刷新
 })
 
 export function upsertCategory(row) {

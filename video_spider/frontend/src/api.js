@@ -23,6 +23,13 @@ export const api = {
     req('/api/categories/sync', { method: 'POST', body: JSON.stringify({ with_counts: withCounts }) }),
   videos: (categoryId, status = null, limit = 300) =>
     req(`/api/videos?category_id=${categoryId}&limit=${limit}${status ? `&status=${status}` : ''}`),
+  allVideos: ({ category_id, status, q, page = 1, page_size = 24 } = {}) => {
+    const qs = new URLSearchParams({ page, page_size })
+    if (category_id != null) qs.set('category_id', category_id)
+    if (status) qs.set('status', status)
+    if (q) qs.set('q', q)
+    return req(`/api/all-videos?${qs}`)
+  },
   tasks: () => req('/api/tasks'),
   createTask: (categoryId, threadCount) =>
     req('/api/tasks', { method: 'POST', body: JSON.stringify({ category_id: categoryId, thread_count: threadCount }) }),
@@ -33,6 +40,7 @@ export const api = {
   settings: () => req('/api/settings'),
   putSettings: values => req('/api/settings', { method: 'PUT', body: JSON.stringify({ values }) }),
   disk: () => req('/api/disk'),
+  runDailyUpdate: () => req('/api/daily-update/run', { method: 'POST' }),
 }
 
 export function loadCategories() {
@@ -54,9 +62,10 @@ export function loadSettings() {
   })
 }
 
-export function loadVideos(categoryId) {
-  return api.videos(categoryId).then(({ videos }) => {
+export function loadVideos(categoryId, status = null) {
+  return api.videos(categoryId, status, 1000).then(({ videos, summary }) => {
     store.videos[categoryId] = videos
+    if (summary) store.videosSummary[categoryId] = summary
   })
 }
 

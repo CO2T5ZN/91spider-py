@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import html
 import json
 import logging
 import mimetypes
+import os
 import shutil
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -75,6 +78,18 @@ def _prewarm_covers() -> None:
         except Exception as e:  # noqa: BLE001
             log.warning("封面预热异常: %s", e)
         time.sleep(120)
+
+
+def _cover_mtime(name: str) -> int:
+    """封面源文件的 mtime，用作 ?v= 版本号：同名封面被替换后 URL 变化，绕开长缓存。
+
+    只 stat 源目录（判重后重生成会原地覆盖同名文件，mtime 即内容版本）；
+    stat 失败回退 0，URL 退化为不带版本但仍然可用。
+    """
+    try:
+        return int((config.COVER_DIR / name).stat().st_mtime)
+    except OSError:
+        return 0
 
 
 @app.get("/covers/{name}")
@@ -147,6 +162,7 @@ def videos(
     items = []
     for r in rows:
         f = paths.find_video_file(r["category_name"], r["video_key"])
+        cover_name = r["cover_path"].split("/")[-1] if r["cover_path"] else None
         items.append({
             "id": r["id"],
             "title": r["title"] or r["video_key"],
@@ -154,7 +170,7 @@ def videos(
             "tags": parse_tags(r["tags"]),
             "category_id": r["category_id"],
             "category_name": r["category_name"],
-            "cover_url": f"/covers/{r['cover_path'].split('/')[-1]}" if r["cover_path"] else None,
+            "cover_url": f"/covers/{cover_name}?v={_cover_mtime(cover_name)}" if cover_name else None,
             "ext": f.suffix.lstrip(".") if f else None,
             "size": f.stat().st_size if f else None,
             "updated_at": r["updated_at"],
@@ -183,67 +199,148 @@ def _media_type(suffix: str) -> str:
     return {".mp4": "video/mp4", ".ts": "video/mp2t"}.get(suffix, "application/octet-stream")
 
 
-# 移动端「新标签页播放」页：极简全屏视频页（无 SPA 依赖）
+# ---------------- TS 时长探测（ffprobe + JSON 文件缓存）----------------
+# mpegts.js 对 VOD 点播只在拿到总时长后才能显示进度条并精确 Range 拖动；
+# TS 容器没有头部长度信息，大文件预载一段也推不出来，必须外部提供。
+# ffprobe 只读容器头/尾，一次探测 <1s，结果按 video_id 缓存到本地 JSON。
+
+_DURATION_LOCK = threading.Lock()
+_DURATION_CACHE: dict[str, float] = {}
+_DURATION_CACHE_FILE = Path(os.environ.get(
+    "GALLERY_DURATION_CACHE", Path(__file__).resolve().parent.parent / ".duration-cache.json"))
+
+
+def _load_duration_cache() -> None:
+    try:
+        data = json.loads(_DURATION_CACHE_FILE.read_text("utf-8"))
+        if isinstance(data, dict):
+            _DURATION_CACHE.update({k: v for k, v in data.items() if isinstance(v, (int, float))})
+    except (OSError, ValueError):
+        pass
+
+
+def _save_duration_cache() -> None:
+    try:
+        tmp = _DURATION_CACHE_FILE.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(_DURATION_CACHE), "utf-8")
+        os.replace(tmp, _DURATION_CACHE_FILE)
+    except OSError as e:  # noqa: BLE001 - 缓存写失败不影响返回结果
+        log.warning("时长缓存写入失败: %s", e)
+
+
+@app.get("/api/duration/{video_id}")
+def video_duration(video_id: int):
+    key = str(video_id)
+    with _DURATION_LOCK:
+        if key in _DURATION_CACHE:
+            return {"duration": _DURATION_CACHE[key]}
+    v = db.query_one(
+        """SELECT v.video_key, v.category_id, c.name AS category_name
+           FROM videos v JOIN categories c ON c.id = v.category_id WHERE v.id = ?""",
+        (video_id,),
+    )
+    if not v:
+        raise HTTPException(404, "视频不存在")
+    f = paths.find_video_file(v["category_name"], v["video_key"])
+    if not f:
+        raise HTTPException(404, "视频文件缺失")
+    duration = None
+    try:
+        r = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "csv=p=0", str(f)],
+            capture_output=True, text=True, timeout=30,
+        )
+        duration = float(r.stdout.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired) as e:  # noqa: BLE001
+        # 无 ffprobe / 探测失败：返回 null，前端按无时长降级（进度条不可拖远端）
+        log.info("ffprobe 探测时长失败 %s: %s", f.name, e)
+    if duration:
+        with _DURATION_LOCK:
+            _DURATION_CACHE[key] = duration
+            _save_duration_cache()
+    return {"duration": duration}
+
+
+# 移动端「新标签页播放」页：全屏 xgplayer（内置移动端手势/倍速；TS 经 mpegts.js 在线播）。
+# 播放器库从 /vendor/ 引用，由 frontend/scripts/copy-vendor.mjs 在构建时复制进 dist
 _WATCH_HTML = """<!DOCTYPE html>
 <html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{title}</title>
+<link rel="stylesheet" href="/vendor/xgplayer.min.css">
 <style>
   html,body{{margin:0;padding:0;height:100%;background:#000;color:#ddd;font-family:system-ui,sans-serif}}
-  body{{display:flex;flex-direction:column;justify-content:center}}
-  header{{padding:8px 14px;font-size:14px;line-height:1.4;color:#bbb;
-          white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-  .stage{{position:relative}}
-  video{{display:block;width:100vw;max-height:calc(100vh - 42px);object-fit:contain;background:#000}}
-  .warn{{padding:40px 20px;text-align:center}}
+  /* dvh 跟随移动端地址栏收展；100vh 是"大视口"，地址栏展开时比可见区域高，
+     会让视频底部（进度条）被挤出屏幕 */
+  body{{height:100vh;height:100dvh;display:flex;flex-direction:column;
+        padding-bottom:env(safe-area-inset-bottom,0px)}}
+  header{{flex:0 0 auto;display:flex;align-items:center;gap:12px;padding:8px 14px}}
+  header .back{{flex:0 0 auto;display:flex;align-items:center;justify-content:center;
+                width:34px;height:34px;margin-left:-8px;color:#ddd;font-size:22px;
+                line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent;
+                border-radius:50%;background:rgba(255,255,255,.08)}}
+  header .back:active{{background:rgba(255,255,255,.2)}}
+  header .t{{flex:1 1 auto;min-width:0;font-size:14px;color:#bbb;line-height:1.4;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+  header a{{flex:0 0 auto;color:#1677ff;text-decoration:none;font-size:13px}}
+  /* 播放区占满剩余高度，高视口时居中、上下自然留空 */
+  .stage{{flex:1 1 auto;min-height:0;position:relative;display:flex;flex-direction:column;
+          justify-content:center;padding-bottom:12px}}
+  .warn{{margin:auto;padding:40px 20px;text-align:center}}
   .warn a{{color:#1677ff}}
-  #seekHint{{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-             background:rgba(0,0,0,.72);color:#fff;font-size:15px;padding:10px 18px;
-             border-radius:10px;pointer-events:none;white-space:nowrap;display:none}}
-  #seekHint .time{{color:#9ecbff;margin-left:8px}}
 </style></head><body>
 {body}
-<script>{seek_js}</script>
+<script src="/vendor/xgplayer.min.js"></script>
+<script src="/vendor/mpegts.js"></script>
+<script src="/vendor/mpegts-plugin.js"></script>
+<script>
+// 返回列表页：本页是列表页 window.open 出来的新标签，优先直接关掉回到列表；
+// 直接打开（书签/分享链接）时退而求其次走历史返回
+window.goBack = function () {{
+  window.close();
+  setTimeout(function () {{
+    if (!window.closed && history.length > 1) history.back();
+  }}, 150);
+}};
+(function () {{
+  var stage = document.querySelector('.stage');
+  if (!stage) return;  // 文件缺失等无播放场景
+  var data = {{ url: '{url}', poster: '{poster}', isTs: {is_ts}, id: {vid} }};
+  var warn = function (msg) {{
+    stage.innerHTML = '<div class="warn">' + msg +
+      '，<a href="' + data.url + '" download>下载文件</a></div>';
+  }};
+  if (data.isTs && !(window.mpegts && mpegts.isSupported())) {{
+    warn('当前浏览器不支持 TS 在线播放');
+    return;
+  }}
+  var cap = Math.max(stage.clientHeight - 16, 180);
+  var create = function (duration) {{
+    var player = new xgplayer({{
+      id: 'player', url: data.url, poster: data.poster,
+      width: '100%', height: cap,
+      videoFillMode: 'contain',
+      autoplay: true, playsinline: true, lang: 'zh-cn',
+      tsDuration: duration,  // MpegtsPlugin 读取：VOD 有了总时长才能拖动进度条
+      plugins: data.isTs ? [window.MpegtsPlugin] : []
+    }});
+    player.on('error', function () {{ warn('在线播放失败'); }});
+  }};
+  if (!data.isTs) {{ create(null); return; }}
+  // TS：先取 ffprobe 探测的总时长（后端有缓存，一次 <1s），失败则降级为无时长
+  fetch('/api/duration/' + data.id).then(function (r) {{ return r.ok ? r.json() : null }})
+    .then(function (d) {{ create(d && d.duration || null) }})
+    .catch(function () {{ create(null) }});
+}})();
+</script>
 </body></html>"""
-
-# 播放页触摸手势：画面上左右滑动快进/快退（右滑 +，左滑 -），与 Player.vue 行为一致
-_SEEK_JS = """
-(function(){
-  var v=document.querySelector('video');
-  if(!v)return;
-  var hint=document.getElementById('seekHint');
-  var box=hint?hint.parentElement:v.parentElement;
-  var SWIPE=24,SPEED=0.2;
-  var tx=0,ty=0,t0=0,active=false,target=null,timer=null;
-  function fmt(s){if(!isFinite(s))return '-';s=Math.max(0,Math.floor(s));
-    var h=Math.floor(s/3600),m=Math.floor(s%3600/60),x=s%60;
-    var mm=(m<10?'0':'')+m,ss=(x<10?'0':'')+x;return h?h+':'+mm+':'+ss:mm+':'+ss;}
-  function show(fwd,t){if(!hint)return;target=t;
-    hint.innerHTML=(fwd?'\\u23e9 \\u5feb\\u8fdb':'\\u23ea \\u5feb\\u9000')+
-      '<span class="time">'+fmt(t)+' / '+fmt(v.duration)+'</span>';
-    hint.style.display='block';}
-  function hide(){if(hint)hint.style.display='none';target=null;}
-  v.addEventListener('touchstart',function(e){var t=e.touches[0];
-    tx=t.clientX;ty=t.clientY;t0=v.currentTime;active=false;},{passive:true});
-  v.addEventListener('touchmove',function(e){
-    var t=e.touches[0],dx=t.clientX-tx,dy=t.clientY-ty;
-    if(!active){if(Math.abs(dx)<SWIPE||Math.abs(dx)<=Math.abs(dy))return;active=true;}
-    e.preventDefault();
-    show(dx>0,Math.min(Math.max(t0+dx*SPEED,0),v.duration||0));
-    clearTimeout(timer);timer=setTimeout(hide,1200);
-  },{passive:false});
-  v.addEventListener('touchend',function(){
-    if(active&&target!=null)v.currentTime=target;
-    hide();active=false;});
-  v.addEventListener('touchcancel',function(){hide();active=false;});
-})();
-"""
 
 
 @app.get("/watch/{video_id}")
 def watch_page(video_id: int):
     v = db.query_one(
-        """SELECT v.id, v.title, v.video_key, v.category_id, c.name AS category_name
+        """SELECT v.id, v.title, v.video_key, v.cover_path, c.name AS category_name
            FROM videos v JOIN categories c ON c.id = v.category_id WHERE v.id = ?""",
         (video_id,),
     )
@@ -251,20 +348,21 @@ def watch_page(video_id: int):
         raise HTTPException(404, "视频不存在")
     title = (v["title"] or v["video_key"])[:80]
     f = paths.find_video_file(v["category_name"], v["video_key"])
-    if not f:
-        body = '<div class="warn">视频文件缺失</div>'
-        seek_js = ""
-    elif f.suffix == ".ts":
-        body = (f'<div class="warn">TS 格式不支持网页播放，'
-                f'<a href="/api/video-file/{video_id}" download>下载文件</a></div>')
-        seek_js = ""
+    if f:
+        url = f"/api/video-file/{video_id}"
+        cover_name = v["cover_path"].split("/")[-1] if v["cover_path"] else None
+        poster = f"/covers/{cover_name}?v={_cover_mtime(cover_name)}" if cover_name else ""
+        is_ts = "true" if f.suffix == ".ts" else "false"
+        body = ('<header><span class="back" onclick="goBack()">←</span>'
+                '<span class="t">' + html.escape(title) + '</span>'
+                f'<a href="{url}" download>下载</a></header>'
+                '<div class="stage"><div id="player"></div></div>')
     else:
-        body = (f'<header>{title}</header>'
-                f'<div class="stage"><video controls autoplay playsinline '
-                f'src="/api/video-file/{video_id}"></video>'
-                f'<div id="seekHint"></div></div>')
-        seek_js = _SEEK_JS
-    return HTMLResponse(_WATCH_HTML.format(title=title, body=body, seek_js=seek_js))
+        url, poster, is_ts = "", "", "false"
+        body = '<div class="warn">视频文件缺失</div>'
+    return HTMLResponse(_WATCH_HTML.format(
+        title=html.escape(title), body=body, url=url, poster=poster, is_ts=is_ts,
+        vid=video_id))
 
 
 # ---------------- 前端静态托管（SPA 回退，放最后注册） ----------------

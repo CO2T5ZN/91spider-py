@@ -84,13 +84,15 @@ onMounted(async () => {
       <a-spin :spinning="loading">
         <a-empty v-if="!loading && items.length === 0" description="没有匹配的视频" />
         <Gallery :items="items" @play="play" />
-        <div class="pager" v-if="total > 0">
-          <a-pagination :current="page" :page-size="pageSize" :total="total"
-                        :page-size-options="['12', '24', '48']" show-size-changer
-                        :show-total="t => `共 ${t} 个`" @change="onPage" />
-        </div>
       </a-spin>
     </main>
+
+    <!-- 分页固定在滚动区外：任何视口高度都可见，不用滚到列表最底翻页 -->
+    <div class="pager" v-if="total > 0">
+      <a-pagination :current="page" :page-size="pageSize" :total="total"
+                    :page-size-options="['12', '24', '48']" show-size-changer
+                    :show-total="t => `共 ${t} 个`" @change="onPage" />
+    </div>
 
     <Player :video="playing" @close="playing = null" />
   </div>
@@ -117,7 +119,7 @@ html, body, #app { margin: 0; padding: 0; background: #101014; }
 .cat-tag:hover { color: #fff; }
 .cat-tag.ant-tag-checkable-checked { background: #1677ff; color: #fff; border-color: #1677ff; }
 
-/* 列表区：占满剩余视口（内容不足也保持该高度），超出部分内部滚动 */
+/* 列表区：占满剩余视口，超出部分内部滚动 */
 .grid-area {
   flex: 1; min-height: 0; overflow-y: auto;
   padding: 14px 18px 8px;
@@ -129,7 +131,12 @@ html, body, #app { margin: 0; padding: 0; background: #101014; }
 .grid-area :deep(.ant-spin-container) { flex: 1; display: flex; flex-direction: column; }
 .grid-area :deep(.ant-empty) { margin: auto; }
 .grid-area :deep(.ant-empty-description) { color: #6a6a75; }
-.pager { margin-top: auto; display: flex; justify-content: center; padding: 18px 0 10px; }
+/* 分页条：滚动区外固定于页面底部，与列表用细线分隔 */
+.pager {
+  flex: 0 0 auto; display: flex; justify-content: center;
+  padding: 10px 0 calc(12px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid #23232b; background: #101014;
+}
 
 /* 分页暗色适配 */
 .pager .ant-pagination-item,

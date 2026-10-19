@@ -16,3 +16,8 @@ board.json
 .vscode/
 .DS_Store
 Thumbs.db
+
+# 运行时缓存（库快照等）
+.db-cache/
+.duration-cache.json
+.cover-cache/
