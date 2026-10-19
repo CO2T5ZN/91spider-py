@@ -270,7 +270,7 @@ onMounted(async () => {
       </a-space>
     </a-card>
 
-    <a-card :bordered="false" style="margin-bottom: 16px" title="下载设置">
+    <a-card :bordered="false" class="settings-card" style="margin-bottom: 16px" title="下载设置">
       <a-space direction="vertical" style="width: 100%" size="middle">
         <a-space direction="vertical" style="width: 100%" size="small">
           <span>视频保存位置（每行一个目录，支持多硬盘）。设为默认后，之后完成的视频<b>固定存到默认盘</b>；未设默认或默认盘不可用时自动存到剩余空间最大的可写盘</span>
@@ -284,29 +284,27 @@ onMounted(async () => {
             </a-typography-text>
           </a-space>
         </a-space>
-        <div v-for="d in disk?.disks || []" :key="d.path">
-          <a-progress v-if="!d.error && d.total" :percent="pct(d)"
-                      :status="pct(d) >= 90 ? 'exception' : 'normal'"
-                      :format="() => `已用 ${pct(d)}%`" />
-          <a-space wrap size="large">
-            <span>
-              <code>{{ d.path }}</code>
-              <a-tag v-if="d.is_default" color="blue" style="margin-left: 8px">默认盘</a-tag>
-            </span>
-            <template v-if="d.error">
-              <a-typography-text type="danger" style="font-size: 12px">不可用：{{ d.error }}</a-typography-text>
-            </template>
-            <template v-else>
-              <span>视频占用 <b>{{ fmtSize(d.videos_size) }}</b></span>
-              <span>磁盘已用 {{ fmtSize(d.used) }} / {{ fmtSize(d.total) }}</span>
-              <span>剩余 <b>{{ fmtSize(d.free) }}</b></span>
-              <a-typography-text v-if="!d.writable" type="warning" style="font-size: 12px">只读/不可写</a-typography-text>
-            </template>
+        <!-- 磁盘行：弹性布局。进度条 flex 自适应伸缩（放不下自动换行），任何情况下不超父元素；
+             百分比/容量数字作为并列元素而不放进 a-progress 的 format（ant 为拉丁字符预留的
+             文字空间对中文不足，会把"已用 xx%"挤出条外、与路径叠字） -->
+        <div v-for="d in disk?.disks || []" :key="d.path" class="disk-row">
+          <div class="disk-head">
+            <code>{{ d.path }}</code>
+            <a-tag v-if="d.is_default" color="blue">默认盘</a-tag>
+            <a-typography-text v-if="d.error" type="danger" style="font-size: 12px">不可用：{{ d.error }}</a-typography-text>
+            <a-typography-text v-else-if="!d.writable" type="warning" style="font-size: 12px">只读/不可写</a-typography-text>
+            <span class="spacer" />
             <a-button v-if="d.is_default" size="small" @click="clearDefaultRoot">取消默认</a-button>
             <a-button v-else size="small" type="primary" ghost
                       :disabled="d.error || !d.writable"
                       @click="setDefaultRoot(d.path)">设为默认</a-button>
-          </a-space>
+          </div>
+          <div v-if="!d.error && d.total" class="disk-stats">
+            <a-progress class="disk-bar" :percent="pct(d)" :show-info="false"
+                        :status="pct(d) >= 90 ? 'exception' : 'normal'" />
+            <span class="pct">已用 {{ pct(d) }}%</span>
+            <span class="nums">视频占用 <b>{{ fmtSize(d.videos_size) }}</b> · {{ fmtSize(d.used) }} / {{ fmtSize(d.total) }} · 剩余 <b>{{ fmtSize(d.free) }}</b></span>
+          </div>
         </div>
         <a-space wrap>
           <a-checkbox v-model:checked="autoRetry">任务完成后自动重试失败视频（一遍）</a-checkbox>
@@ -439,4 +437,22 @@ onMounted(async () => {
 .actions :deep(.ant-input-number) {
   flex: 0 0 auto;
 }
+/* 下载设置·磁盘行：弹性布局，flex 子项可伸缩可换行，绝不超出父元素 */
+.disk-row { margin-bottom: 6px; }
+.disk-head, .disk-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+.disk-head .spacer { flex: 1 1 auto; }   /* 把右侧按钮推到行尾 */
+.disk-bar {
+  flex: 1 1 180px;                        /* 弹性伸缩：宽时撑满剩余空间，窄时收缩 */
+  min-width: 120px;
+  max-width: 100%;
+}
+.disk-stats .pct { white-space: nowrap; }
+.disk-stats .nums { white-space: nowrap; color: #595959; }
 </style>
