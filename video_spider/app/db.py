@@ -97,6 +97,10 @@ def init() -> None:
         _CONN = sqlite3.connect(config.DB_PATH, check_same_thread=False)
         _CONN.row_factory = sqlite3.Row
         _CONN.execute("PRAGMA journal_mode=WAL")
+        # WAL 推荐 NORMAL：commit 不再逐次 fsync。多任务并发写盘时 fsync 会被拖到秒级，
+        # 而 commit 全程持有 _LOCK，会把所有 API/工作线程一起拖死（面板假死）。
+        # 代价仅是断电时丢最后几条未 checkpoint 的记录，下载分片本就支持续传，可接受。
+        _CONN.execute("PRAGMA synchronous=NORMAL")
         _CONN.execute("PRAGMA foreign_keys=ON")
         _CONN.executescript(SCHEMA)
         _migrate(_CONN)
